@@ -237,6 +237,39 @@ def test_pending_store_roundtrip(hermes_home):
     assert wa.get_pending("memory", rec["id"]) is None
 
 
+def test_decision_ledger_records_approval_and_rejection(hermes_home):
+    from tools import write_approval as wa
+    rec = wa.stage_write("memory", {"action": "add", "content": "x"},
+                         summary="add x", origin="foreground")
+    wa.record_decision(rec, decision="approved", decided_by="london")
+    wa.record_decision(rec, decision="rejected", decided_by="london")
+    decisions = wa.list_decisions("memory")
+    assert [d["decision"] for d in decisions] == ["approved", "rejected"]
+    assert all(d["pending_id"] == rec["id"] for d in decisions)
+
+
+def test_approval_decision_creates_action_receipt(hermes_home):
+    from hermes_cli.write_approval_commands import handle_pending_subcommand
+    from tools import write_approval as wa
+    from tools.action_receipts import list_receipts
+
+    wa.stage_write("memory", {"action": "add", "content": "receipt me"},
+                   summary="receipt me", origin="foreground")
+    handle_pending_subcommand("memory", ["reject", "all"])
+    receipts = list_receipts(scope="memory")
+    assert receipts[0]["status"] == "rejected"
+    assert receipts[0]["action"] == "memory.write"
+
+
+def test_expired_pending_records_are_not_approvable(hermes_home):
+    from tools import write_approval as wa
+    rec = wa.stage_write("memory", {"action": "add", "content": "x"},
+                         summary="add x", origin="foreground", expires_in=0)
+    assert wa.get_pending("memory", rec["id"]) is None
+    assert wa.list_pending("memory") == []
+    assert wa.list_decisions("memory")[0]["decision"] == "expired"
+
+
 # ---------------------------------------------------------------------------
 # Shared command handler
 # ---------------------------------------------------------------------------

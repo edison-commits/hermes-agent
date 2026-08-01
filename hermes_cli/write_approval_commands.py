@@ -105,6 +105,22 @@ def _resolve_one(subsystem: str, rest: List[str]):
     return rest[0], None
 
 
+def _record_receipt(subsystem: str, record, status: str) -> None:
+    try:
+        from tools.action_receipts import record_receipt
+        record_receipt(
+            action=f"{subsystem}.write",
+            status=status,
+            scope=subsystem,
+            evidence=[record.get("summary", "")],
+            idempotency_key=f"{subsystem}:{record.get('id', '')}:{status}",
+        )
+    except Exception:
+        # Approval decisions remain authoritative even if optional receipt
+        # bookkeeping is unavailable.
+        return
+
+
 def _approve(subsystem: str, rest: List[str], memory_store) -> str:
     target, err = _resolve_one(subsystem, rest)
     if err or target is None:
@@ -126,6 +142,8 @@ def _approve(subsystem: str, rest: List[str], memory_store) -> str:
     for rec in targets:
         ok, msg = _apply_one(subsystem, rec, memory_store)
         if ok:
+            wa.record_decision(rec, decision="approved", decided_by="user")
+            _record_receipt(subsystem, rec, "approved")
             wa.discard_pending(subsystem, rec["id"])
             applied += 1
         else:
@@ -163,9 +181,14 @@ def _reject(subsystem: str, rest: List[str]) -> str:
         n = 0
         for rec in wa.list_pending(subsystem):
             if wa.discard_pending(subsystem, rec["id"]):
+                wa.record_decision(rec, decision="rejected", decided_by="user")
+                _record_receipt(subsystem, rec, "rejected")
                 n += 1
         return f"Rejected {n} pending {subsystem} write(s)."
-    if wa.discard_pending(subsystem, target):
+    rec = wa.get_pending(subsystem, target)
+    if rec and wa.discard_pending(subsystem, target):
+        wa.record_decision(rec, decision="rejected", decided_by="user")
+        _record_receipt(subsystem, rec, "rejected")
         return f"Rejected pending {subsystem} write '{target}'."
     return f"No pending {subsystem} write with id '{target}'."
 

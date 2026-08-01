@@ -136,6 +136,7 @@ docs/superpowers/*
 # also created in-repo when an agent operates in this checkout). Plans, audit
 # logs, and per-session caches are never artifacts of the codebase.
 .hermes/
+.workflow/
 
 # Desktop/bootstrap install marker written into the managed checkout root by the
 # bootstrap installer. It is Hermes-managed runtime state, never a code change —
@@ -190,3 +191,6 @@ infographics/
 infograficos/
 infografico/
 native/fts5_cjk/*.so
+
+# Local Hermes workflow-state artifacts
+.workflow/

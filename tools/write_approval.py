@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -64,7 +65,10 @@ _SUBSYSTEMS = (MEMORY, SKILLS)
 # prompt every write for the user's approval. There is intentionally no third
 # "block all writes" state — to disable a subsystem entirely use its own
 # enable flag (e.g. ``memory.memory_enabled: false``).
+_SUBSYSTEMS = (MEMORY, SKILLS)
 CONFIG_KEY = "write_approval"
+_DEFAULT_EXPIRY_SECONDS = 7 * 24 * 60 * 60
+_DECISION_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +115,88 @@ def _pending_dir(subsystem: str) -> Path:
     return get_hermes_home() / "pending" / subsystem
 
 
+def _decision_path(subsystem: str) -> Path:
+    return _pending_dir(subsystem) / "decisions.jsonl"
+
+
+def record_decision(record: Dict[str, Any], *, decision: str,
+                    decided_by: str = "system", reason: str = "") -> Dict[str, Any]:
+    """Append a durable approval decision without retaining the full payload."""
+    subsystem = record.get("subsystem", "")
+    if subsystem not in _SUBSYSTEMS:
+        raise ValueError(f"invalid approval subsystem: {subsystem!r}")
+    if decision not in {"approved", "rejected", "expired"}:
+        raise ValueError(f"invalid approval decision: {decision!r}")
+    entry = {
+        "pending_id": record.get("id", ""),
+        "subsystem": subsystem,
+        "decision": decision,
+        "decided_by": decided_by or "system",
+        "reason": reason or "",
+        "created_at": time.time(),
+        "summary": record.get("summary", ""),
+        "origin": record.get("origin", "foreground"),
+    }
+    try:
+        path = _decision_path(subsystem)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _DECISION_LOCK, path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception as exc:  # pragma: no cover - disk failure path
+        logger.error("Failed to record %s decision for %s: %s", decision, subsystem, exc)
+    return entry
+
+
+def list_decisions(subsystem: str) -> List[Dict[str, Any]]:
+    """Return durable decisions oldest first, tolerating a truncated last line."""
+    if subsystem not in _SUBSYSTEMS:
+        return []
+    path = _decision_path(subsystem)
+    if not path.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    value = json.loads(line)
+                    if isinstance(value, dict):
+                        rows.append(value)
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+def _is_expired(record: Dict[str, Any], now: Optional[float] = None) -> bool:
+    expires_at = record.get("expires_at")
+    return isinstance(expires_at, (int, float)) and expires_at <= (now or time.time())
+
+
+def _expire_record(subsystem: str, record: Dict[str, Any]) -> None:
+    path = _pending_dir(subsystem) / f"{record.get('id', '')}.json"
+    try:
+        if path.exists():
+            path.unlink()
+            record_decision(record, decision="expired", reason="approval expired")
+    except OSError:
+        logger.warning("Failed to expire pending %s/%s", subsystem, record.get("id"))
+
+
+def _purge_expired(subsystem: str, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    active = []
+    for record in records:
+        if _is_expired(record):
+            _expire_record(subsystem, record)
+        else:
+            active.append(record)
+    return active
+
+
 def stage_write(subsystem: str, payload: Dict[str, Any],
-                *, summary: str, origin: str) -> Dict[str, Any]:
+                *, summary: str, origin: str,
+                expires_in: Optional[float] = _DEFAULT_EXPIRY_SECONDS) -> Dict[str, Any]:
     """Persist a pending write and return a short record describing it.
 
     Args:
@@ -137,6 +221,7 @@ def stage_write(subsystem: str, payload: Dict[str, Any],
         "summary": (summary or "").strip(),
         "origin": origin or "foreground",
         "created_at": time.time(),
+        "expires_at": (time.time() + expires_in) if expires_in is not None else None,
         "payload": payload,
     }
     try:
@@ -162,6 +247,7 @@ def list_pending(subsystem: str) -> List[Dict[str, Any]]:
             records.append(json.loads(p.read_text(encoding="utf-8")))
         except Exception:
             logger.warning("Skipping unreadable pending record: %s", p)
+    records = _purge_expired(subsystem, records)
     records.sort(key=lambda r: r.get("created_at", 0))
     return records
 
@@ -172,7 +258,11 @@ def get_pending(subsystem: str, pending_id: str) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if _is_expired(record):
+            _expire_record(subsystem, record)
+            return None
+        return record
     except Exception:
         return None
 

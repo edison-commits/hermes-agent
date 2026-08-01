@@ -2024,13 +2024,18 @@ def _is_verification_artifact_cleanup(command: str) -> bool:
         return False
 
     operand = argv[2]
-    temp_dir = os.path.realpath(tempfile.gettempdir())
+    configured_temp = os.path.abspath(tempfile.gettempdir())
+    canonical_temp = os.path.realpath(configured_temp)
     basename = os.path.basename(operand)
-    if operand != os.path.join(temp_dir, basename):
-        return False
-
     target = os.path.realpath(operand)
-    if os.path.dirname(target) != temp_dir:
+    allowed_dirs = {canonical_temp}
+    # macOS exposes /tmp as a symlink to /private/tmp. Treat only this
+    # platform alias as equivalent; arbitrary symlinked temp dirs stay gated.
+    if configured_temp in {"/tmp", "/private/tmp"} and canonical_temp in {"/tmp", "/private/tmp"}:
+        allowed_dirs.update({"/tmp", "/private/tmp"})
+    if not any(operand == os.path.join(directory, basename) for directory in allowed_dirs):
+        return False
+    if target != os.path.join(canonical_temp, basename):
         return False
     return re.fullmatch(r"hermes-(?:verify|ad-hoc)-[A-Za-z0-9_.-]+", basename) is not None
 
