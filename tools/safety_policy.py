@@ -74,6 +74,26 @@ def _host_matches(host: str, rule: str) -> bool:
 
 
 @dataclass(frozen=True)
+class AttributionDecision:
+    allow: bool
+    verdict: str
+
+
+_PRECISE_ATTRIBUTION_SOURCES = frozenset({
+    "direct_human", "delegation", "comment_source", "trigger_owner", "rule_owner",
+})
+
+
+def attribution_decision(source: str, *, strict: bool = False) -> AttributionDecision:
+    """Decide whether an action has sufficiently precise human attribution."""
+    normalized = (source or "").strip().lower()
+    precise = normalized in _PRECISE_ATTRIBUTION_SOURCES
+    if strict and not precise:
+        return AttributionDecision(False, "imprecise")
+    return AttributionDecision(True, "precise" if precise else "degraded")
+
+
+@dataclass(frozen=True)
 class EgressPolicy:
     allowed_hosts: tuple[str, ...] = ()
     denied_hosts: tuple[str, ...] = ()
@@ -115,6 +135,7 @@ def egress_decision(host: str, policy: EgressPolicy | None) -> EgressDecision:
 
 
 __all__ = [
+    "AttributionDecision",
     "EgressDecision",
     "EgressPolicy",
     "audience_floor",

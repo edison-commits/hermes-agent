@@ -259,6 +259,9 @@ def test_approval_decision_creates_action_receipt(hermes_home):
     receipts = list_receipts(scope="memory")
     assert receipts[0]["status"] == "rejected"
     assert receipts[0]["action"] == "memory.write"
+    assert receipts[0]["provenance_source"] == "direct_human"
+    assert receipts[0]["evidence_kind"] == "approval"
+    assert receipts[0]["evidence_ref"]
 
 
 def test_expired_pending_records_are_not_approvable(hermes_home):

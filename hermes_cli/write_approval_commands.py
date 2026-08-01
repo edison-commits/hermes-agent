@@ -113,6 +113,11 @@ def _record_receipt(subsystem: str, record, status: str) -> None:
             status=status,
             scope=subsystem,
             evidence=[record.get("summary", "")],
+            evidence_kind="approval",
+            evidence_ref=record.get("id"),
+            provenance_source="direct_human",
+            originator="user",
+            accountable_party="user",
             idempotency_key=f"{subsystem}:{record.get('id', '')}:{status}",
         )
     except Exception:

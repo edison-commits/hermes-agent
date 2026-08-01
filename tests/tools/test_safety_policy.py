@@ -29,6 +29,15 @@ def test_egress_policy_normalizes_hosts_and_denies_subdomains():
     assert denied.verdict == "denied"
 
 
+def test_strict_attribution_blocks_degraded_sources():
+    from tools.safety_policy import attribution_decision
+
+    assert attribution_decision("direct_human", strict=True).allow is True
+    assert attribution_decision("owner_fallback", strict=True).allow is False
+    assert attribution_decision("owner_fallback", strict=False).allow is True
+    assert attribution_decision("owner_fallback", strict=True).verdict == "imprecise"
+
+
 def test_egress_policy_rejects_ambiguous_host_rules():
     from tools.safety_policy import parse_egress_policy
 
